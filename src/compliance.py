@@ -1,4 +1,8 @@
+import os
+import json
 import datetime
+from dotenv import load_dotenv
+from openai import AsyncOpenAI
 
 # Compliance Rules
 MAX_MEAL_BUDGET = 70
@@ -8,69 +12,89 @@ TIP_LIMIT = 0.2
 LODGING_MAX = 250
 MILEAGE_RATE = 0.67
 
-def validate_meal_expense(receipt):
+load_dotenv()
+
+api_key = os.getenv('OPENAI_API_KEY')
+client = AsyncOpenAI(api_key=api_key)
+
+async def validate_receipts_with_llm(receipts, compliance_rules):
     """
-    Validates meal expenses against company policies.
+    Validates structured receipts using an LLM against compliance rules and yields results incrementally.
     """
-    total = receipt.get("total", 0)
-    flagged = []
 
-    # Check if meal exceeds the daily budget
-    if total > MAX_MEAL_BUDGET:
-        flagged.append(f"Meal exceeds daily budget ($70), total was ${total:.2f}.")
+    json_schema = {
+        "name": "receipt_validation",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "is_compliant": {"type": "boolean"},
+                "violations": {
+                    "type": "array",
+                    "items": {"type": "string"}
+                }
+            },
+            "required": ["is_compliant", "violations"],
+            "additionalProperties": False
+        }
+    }
 
-    # Check if total meal requires CEO/CFO approval
-    if total > MAX_MEAL_WITH_APPROVAL:
-        flagged.append(f"Meal above $200 requires CEO/CFO approval, total was ${total:.2f}.")
-
-    # Check alcohol compliance
-    # Todo: Add better alcohol detection from the ocr
-    alcohol_items = [item for item in receipt["items"] if "beer" in item["name"].lower() or "wine" in item["name"].lower() or "alcohol" in item["name"].lower()]
-    alcohol_total = sum(item["price"] for item in alcohol_items)
+    rules = "\n".join(
+        [f"- {rule['rule_name']}: {rule['value']} {rule['type']}" for rule in compliance_rules]
+    )
     
-    if alcohol_total > (total * ALCOHOL_LIMIT):
-        flagged.append("Alcohol exceeds 20% of meal cost.")
+    print(f"Rules: {rules}")
 
-    # Check tip compliance
-    # Todo: Add better tip detection from the ocr
-    tip_amount = total - sum(item["price"] for item in receipt["items"])
-    if tip_amount > (total * TIP_LIMIT):
-        flagged.append("Tip exceeds 20% of meal cost.")
+    for receipt in receipts:
+        instruction_prompt = f"""
+        You are a compliance officer reviewing business expense receipts.
+        Your task is to determine if the given receipt is compliant with company policy.
 
-    return flagged
+        **Company Expense Rules:**
+        {rules}
 
-def validate_lodging_expense(receipt):
-    """
-    Validates lodging expenses against company policies.
-    """
-    total = receipt.get("total", 0)
-    flagged = []
+        **Receipt to Validate:**
+        Merchant: {receipt['merchant']}
+        Date: {receipt['date']}
+        Category: {receipt['category']}
+        Total Amount: ${receipt['total']}
+        Alcohol Total: ${receipt.get('alcohol_total', 0.0)}
+        Tip Amount: ${receipt.get('tip_amount', 0.0)}
+        Items:
+        {json.dumps(receipt['items'], indent=4)}
 
-    if total > LODGING_MAX:
-        flagged.append("Lodging cost exceeds $250 and requires approval.")
+        **Instructions:**
+        - Compare the receipt details against the company expense rules.
+        - If any rules are violated, list the violations clearly.
+        - If the receipt is compliant, return `is_compliant: true` and an empty list of violations.
+        """
 
-    return flagged
+        PROMPT_MESSAGES = [
+            {"role": "system", "content": "You are a compliance officer reviewing business expense receipts."},
+            {"role": "user", "content": instruction_prompt},
+        ]
 
-def validate_travel_expense(receipt):
-    """
-    Validates travel expenses against company policies.
-    """
-    category = receipt.get("category", "").lower()
-    flagged = []
+        try:
+            response = await client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=PROMPT_MESSAGES,
+                response_format={"type": "json_schema", "json_schema": json_schema},
+                max_tokens=1000,
+                temperature=0.1,
+            )
 
-    if category == "airfare" and "first class" in receipt["items"]:
-        flagged.append("First-class airfare is not reimbursable.")
+            structured_data = json.loads(response.choices[0].message.content)
 
-    if category == "rental car" and "luxury" in receipt["items"]:
-        flagged.append("Luxury car rentals are not reimbursable.")
+            receipt['is_compliant'] = structured_data['is_compliant']
+            receipt['violations'] = structured_data['violations']
+            
+            yield {"validated_receipts": [receipt]}
 
-    return flagged
+        except Exception as e:
+            print(f"❌ Error validating receipt {receipt.get('receipt_id', 'unknown')}: {e}")
 
-# Todo: Add more validation rules as needed
-def validate_receipt(receipt):
-    """
-    Validates the receipt against multiple compliance rules.
-    """
-    violations = validate_meal_expense(receipt)
-
-    return violations
+            receipt['is_compliant'] = False
+            receipt['violations'] = [f"Validation error: {str(e)}"]
+            
+            yield {"validated_receipts": [receipt]}
+    
