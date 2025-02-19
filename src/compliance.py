@@ -4,14 +4,6 @@ import datetime
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
-# Compliance Rules
-MAX_MEAL_BUDGET = 70
-MAX_MEAL_WITH_APPROVAL = 200
-ALCOHOL_LIMIT = 0.2
-TIP_LIMIT = 0.2
-LODGING_MAX = 250
-MILEAGE_RATE = 0.67
-
 load_dotenv()
 
 api_key = os.getenv('OPENAI_API_KEY')
@@ -42,8 +34,6 @@ async def validate_receipts_with_llm(receipts, compliance_rules):
     rules = "\n".join(
         [f"- {rule['rule_name']}: {rule['value']} {rule['type']}" for rule in compliance_rules]
     )
-    
-    print(f"Rules: {rules}")
 
     for receipt in receipts:
         instruction_prompt = f"""
@@ -57,20 +47,18 @@ async def validate_receipts_with_llm(receipts, compliance_rules):
         Merchant: {receipt['merchant']}
         Date: {receipt['date']}
         Category: {receipt['category']}
-        Total Amount: ${receipt['total']}
-        Alcohol Total: ${receipt.get('alcohol_total', 0.0)}
-        Tip Amount: ${receipt.get('tip_amount', 0.0)}
+        Total Amount: ${receipt['total']:.2f}
         Items:
         {json.dumps(receipt['items'], indent=4)}
 
-        **Instructions:**
-        - Compare the receipt details against the company expense rules.
-        - If any rules are violated, list the violations clearly.
+        **Validation Rules:**
+        - Compare the total amount, alcohol amount, and tip against the policy limits PER RECEIPT.
+        - If any rules are violated, list the violations, but only list actual violations.
         - If the receipt is compliant, return `is_compliant: true` and an empty list of violations.
         """
 
         PROMPT_MESSAGES = [
-            {"role": "system", "content": "You are a compliance officer reviewing business expense receipts."},
+            {"role": "system", "content": "You are a compliance officer reviewing business expenses."},
             {"role": "user", "content": instruction_prompt},
         ]
 
@@ -87,14 +75,10 @@ async def validate_receipts_with_llm(receipts, compliance_rules):
 
             receipt['is_compliant'] = structured_data['is_compliant']
             receipt['violations'] = structured_data['violations']
-            
+
             yield {"validated_receipts": [receipt]}
 
         except Exception as e:
-            print(f"❌ Error validating receipt {receipt.get('receipt_id', 'unknown')}: {e}")
-
             receipt['is_compliant'] = False
             receipt['violations'] = [f"Validation error: {str(e)}"]
-            
             yield {"validated_receipts": [receipt]}
-    
