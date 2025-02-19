@@ -1,0 +1,12 @@
+openai
+pillow
+langgraph
+pandas
+xlsxwriter
+streamlit
+openpyxl
+fpdf
+matplotlib
+sendgrid
+mailersend
+"python-dotenv"
