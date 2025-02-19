@@ -11,6 +11,17 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "s
 
 from langgraph_pipeline import graph
 
+# Predefined Compliance Rules
+DEFAULT_RULES = [
+    {"rule_name": "Max Daily Meal Budget", "value": 70, "type": "Amount ($)"},
+    {"rule_name": "Individual Meals Receipt Approval Required Above", "value": 200, "type": "Amount ($)"},
+    {"rule_name": "Alcohol Limit Per Receipt", "value": 20, "type": "Percentage (%)"},
+    {"rule_name": "Tip Limit Per Receipt", "value": 20, "type": "Percentage (%)"},
+    {"rule_name": "Max Lodging Cost Per Night", "value": 250, "type": "Amount ($)"},
+    {"rule_name": "Airfare - Economy Required for Flights < 6 hrs", "value": True, "type": "Boolean"},
+    {"rule_name": "Rental Cars - No Luxury Vehicles Allowed", "value": True, "type": "Boolean"},
+]
+
 # Initialize session state
 if "validated_receipts" not in st.session_state:
     st.session_state.validated_receipts = []
@@ -18,21 +29,13 @@ if "processing" not in st.session_state:
     st.session_state.processing = False
 if "expense_report_paths" not in st.session_state:
     st.session_state.expense_report_paths = []
-if "rules" not in st.session_state:
-    st.session_state.rules = [
-        {"rule_name": "Max Daily Meal Budget", "value": 70, "type": "Amount ($)"},
-        {"rule_name": "Max Daily Lodging Budget", "value": 250, "type": "Amount ($)"},
-        {"rule_name": "Alcohol Limit Per Receipt", "value": 20, "type": "Percentage (%)"},
-        {"rule_name": "Tip Limit Per Receipt", "value": 20, "type": "Percentage (%)"},
-        {"rule_name": "Meals Approval Required Above", "value": 200, "type": "Amount ($)"},
-    ]
 
 # Streamlit App
 def main():
     st.title("📊 Expense Report Generator")
+    st.write("Automated processing of receipts with compliance enforcement.")
     st.write("Upload receipt images to generate an expense report.")
-
-    # File uploader
+    
     uploaded_files = st.file_uploader("Upload receipt images", type=["jpg", "png"], accept_multiple_files=True)
     
     status_text = st.empty()
@@ -49,13 +52,13 @@ def main():
             with open(file_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
             receipt_paths.append(file_path)
-            
+
         state = {
             "receipt_paths": receipt_paths,
             "extracted_receipts": [],
             "validated_receipts": [],
             "expense_report_paths": [],
-            "compliance_rules": st.session_state.rules,
+            "compliance_rules": DEFAULT_RULES,
         }
 
         # Function to run the async process
@@ -79,7 +82,7 @@ def main():
                     "Total Amount": r.get("total", 0.0),
                     "Category": r.get("category", "Other"),
                     "Compliance Status": "✅ Compliant" if r["is_compliant"] else "❌ Non-Compliant",
-                    "Violations": "; ".join(r.get("violations", [])) if not r["is_compliant"] else "None"
+                    "Violations": "\n".join(r.get("violations", [])) if not r["is_compliant"] else "None"
                 }
                 for r in st.session_state.validated_receipts
             ])
@@ -91,7 +94,6 @@ async def process_receipts(state, status_text, progress_bar, results_table):
     progress_bar.progress(0)
 
     async for step in graph.astream(state):
-        # Track processing steps
         if "OCR_Processing" in step:
             extracted_receipts = step["OCR_Processing"].get("extracted_receipts", [])
             progress_bar.progress(len(extracted_receipts) / total_receipts)
