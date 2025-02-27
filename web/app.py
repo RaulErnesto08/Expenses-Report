@@ -9,7 +9,8 @@ import streamlit as st
 # Add src directory to Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
-from langgraph_pipeline import graph
+from workflows.expense_workflow import create_expense_workflow  # ✅ Updated import
+from schemas.state import PipelineState
 
 # Predefined Compliance Rules
 DEFAULT_RULES = [
@@ -30,12 +31,46 @@ if "processing" not in st.session_state:
 if "expense_report_paths" not in st.session_state:
     st.session_state.expense_report_paths = []
 
+# Initialize LangGraph Workflow
+graph = create_expense_workflow()
+
 # Streamlit App
 def main():
     st.title("📊 Expense Report Generator")
     st.write("Automated processing of receipts with compliance enforcement.")
-    st.write("Upload receipt images to generate an expense report.")
     
+    st.subheader("📝 Report Details")
+
+    # Travel Dates
+    col1, col2 = st.columns(2)
+    with col1:
+        travel_start_date = st.date_input("📅 Travel Start Date", value=None)
+    with col2:
+        travel_end_date = st.date_input("📅 Travel End Date", value=None)
+
+    # Requester & Requester Department
+    col1, col2 = st.columns(2)
+    with col1:
+        requester = st.text_input("👤 Requester Name", value="")
+    with col2:
+        requester_department = st.text_input("🏢 Requester Department", value="")
+
+    # Approver & Approver Department
+    col1, col2 = st.columns(2)
+    with col1:
+        approver = st.text_input("🧑‍💼 Approver Name", value="")
+    with col2:
+        approver_department = st.text_input("🏢 Approver Department", value="")
+
+    # Client & Project
+    col1, col2 = st.columns(2)
+    with col1:
+        client = st.text_input("🏢 Client (Optional)", value="")
+    with col2:
+        project = st.text_input("📂 Project (Optional)", value="")
+
+    
+    st.write("Upload receipt images to generate an expense report.")
     uploaded_files = st.file_uploader("Upload receipt images", type=["jpg", "png"], accept_multiple_files=True)
     
     status_text = st.empty()
@@ -53,12 +88,20 @@ def main():
                 f.write(uploaded_file.getbuffer())
             receipt_paths.append(file_path)
 
-        state = {
+        state: PipelineState = {
             "receipt_paths": receipt_paths,
             "extracted_receipts": [],
             "validated_receipts": [],
             "expense_report_paths": [],
             "compliance_rules": DEFAULT_RULES,
+            "travel_start_date": travel_start_date.strftime('%Y-%m-%d') if travel_start_date else None,
+            "travel_end_date": travel_end_date.strftime('%Y-%m-%d') if travel_end_date else None,
+            "requester": requester,
+            "requester_department": requester_department,
+            "approver": approver,
+            "approver_department": approver_department,
+            "client": client,
+            "project": project,
         }
 
         # Function to run the async process
@@ -93,42 +136,54 @@ async def process_receipts(state, status_text, progress_bar, results_table):
     total_receipts = len(state["receipt_paths"])
     progress_bar.progress(0)
 
-    async for step in graph.astream(state):
-        if "OCR_Processing" in step:
-            extracted_receipts = step["OCR_Processing"].get("extracted_receipts", [])
-            progress_bar.progress(len(extracted_receipts) / total_receipts)
-            status_text.text(f"📄 Processing receipt {len(extracted_receipts)}/{total_receipts} (OCR)")
+    while True:
+        async for step in graph.astream(state):
 
-        if "Compliance_Checking" in step:
-            validated_receipts = step["Compliance_Checking"].get("validated_receipts", [])
-            progress_bar.progress(len(validated_receipts) / total_receipts)
-            status_text.text(f"✅ Validating receipt {len(validated_receipts)}/{total_receipts} (Compliance)")
-            st.session_state.validated_receipts = validated_receipts
+            if "Processing" in step:
+                extracted_receipts = step["Processing"].get("extracted_receipts", [])
+                if extracted_receipts:
+                    progress_bar.progress(len(extracted_receipts) / total_receipts)
+                    status_text.text(f"📄 Processing receipt {len(extracted_receipts)}/{total_receipts} (OCR)")
 
-        if "Expense_Report_Generation" in step:
-            expense_report_paths = step["Expense_Report_Generation"].get("expense_report_paths", [])
-            if expense_report_paths:
+            if "Processing" in step and "validated_receipts" in step["Processing"]:
+                validated_receipts = step["Processing"]["validated_receipts"]
+                st.session_state.validated_receipts = validated_receipts
+                status_text.text(f"✅ Validating receipt {len(validated_receipts)}/{total_receipts} (Compliance)")
+
+            if "Processing" in step and "expense_report_paths" in step["Processing"]:
+                expense_report_paths = step["Processing"]["expense_report_paths"]
                 st.session_state.expense_report_paths = expense_report_paths
-                
-    progress_bar.progress(1.0)
-    status_text.text("🎉 Processing complete! Download the report below.")
+                    
+            if "Action" in step and step["Action"] is not None:
+                if "email_status" in step["Action"]:
+                    status_text.text(step["Action"]["email_status"])
 
-    # Create a ZIP file containing both reports
-    if st.session_state.expense_report_paths:
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
-            for report_path in st.session_state.expense_report_paths:
-                zipf.write(report_path, os.path.basename(report_path))
-        
-        zip_buffer.seek(0)
-        
-        st.download_button(
-            label="📥 Download Expense Reports (ZIP)",
-            data=zip_buffer,
-            file_name="expense_reports.zip",
-            mime="application/zip",
-        )
-        
-        
+                if "next_step" in step["Action"]:
+                    next_step = step["Action"]["next_step"]
+
+                    if next_step == "Done":
+                        progress_bar.progress(1.0)
+                        status_text.text("🎉 Processing complete! Download the report below.")
+
+                        if "zip_buffer" not in st.session_state:
+                            if st.session_state.expense_report_paths:
+                                zip_buffer = io.BytesIO()
+                                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
+                                    for report_path in st.session_state.expense_report_paths:
+                                        zipf.write(report_path, os.path.basename(report_path))
+
+                                zip_buffer.seek(0)
+                                st.session_state.zip_buffer = zip_buffer  
+
+                        if "zip_buffer" in st.session_state:
+                            st.download_button(
+                                label="📥 Download Expense Reports (ZIP)",
+                                data=st.session_state.zip_buffer,
+                                file_name="expense_reports.zip",
+                                mime="application/zip",
+                            )
+
+                        return
+
 if __name__ == "__main__":
     main()

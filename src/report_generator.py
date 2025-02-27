@@ -1,4 +1,5 @@
 import os
+import openpyxl
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -6,7 +7,7 @@ from fpdf import FPDF
 from datetime import datetime
 from collections import Counter
 
-def generate_expense_report(valid_receipts, invalid_receipts, output_path):
+def generate_expense_report(valid_receipts, invalid_receipts, output_path, user_inputs):
     """
     Generates an expense report in Excel and PDF formats with:
     - A summary sheet with compliance statistics.
@@ -15,109 +16,52 @@ def generate_expense_report(valid_receipts, invalid_receipts, output_path):
     """
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    excel_path = generate_excel_report(valid_receipts, invalid_receipts, f"{output_path}.xlsx")
-    pdf_path = generate_pdf_report(valid_receipts, invalid_receipts, f"{output_path}.pdf")
+    excel_path = generate_excel_report(valid_receipts, invalid_receipts, f"{output_path}.xlsx", user_inputs)
+    pdf_path = generate_pdf_report(valid_receipts, invalid_receipts, f"{output_path}.pdf", user_inputs)
     
     return excel_path, pdf_path
 
-def generate_excel_report(valid_receipts, invalid_receipts, output_path):
+def generate_excel_report(valid_receipts, invalid_receipts, output_path, user_inputs):
     """
-    Generates an Excel expense report.
+    Generates an expense report based on the provided template.
     """
     
-    new_valid_df = pd.DataFrame([
-        {
-            "Merchant": r.get("merchant", "Unknown Merchant"),
-            "Date": r.get("date", "Unknown Date"),
-            "Total Amount ($)": r.get("total", 0.0),
-            "Alcohol Total ($)": r.get("alcohol_total", 0.0),
-            "Tip Amount ($)": r.get("tip_amount", 0.0),
-            "Category": r.get("category", "Other"),
-            "Receipt ID": r.get("receipt_id", "Unknown ID")
-        }
-        for r in valid_receipts
-    ])
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    TEMPLATE_PATH = os.path.join(script_dir, "assets", "Template.xlsx")
+    
+    # Load the Excel template
+    wb = openpyxl.load_workbook(TEMPLATE_PATH)
+    sheet = wb.active
 
-    new_invalid_df = pd.DataFrame([
-        {
-            "Merchant": r.get("merchant", "Unknown Merchant"),
-            "Date": r.get("date", "Unknown Date"),
-            "Total Amount ($)": r.get("total", 0.0),
-            "Alcohol Total ($)": r.get("alcohol_total", 0.0),
-            "Tip Amount ($)": r.get("tip_amount", 0.0),
-            "Category": r.get("category", "Other"),
-            "Receipt ID": r.get("receipt_id", "Unknown ID"),
-            "Violations": "; ".join(r.get("violations", []))
-        }
-        for r in invalid_receipts
-    ])
+    # Set header values
+    sheet["B3"] = datetime.today().strftime('%Y-%m-%d')  # Submission Date
+    sheet["B7"] = f"{user_inputs.get('travel_start_date', 'Not Provided')} to {user_inputs.get('travel_end_date', 'Not Provided')}"  # Travel Dates
+    sheet["D3"], sheet["E3"] = user_inputs.get("requester", ""), user_inputs.get("requester_department", "")
+    sheet["D5"], sheet["E5"] = user_inputs.get("approver", ""), user_inputs.get("approver_department", "")
+    sheet["D7"], sheet["E7"] = user_inputs.get("client", ""), user_inputs.get("project", "")
 
-    # Load existing data if file exists
-    if os.path.exists(output_path):
-        existing_data = pd.ExcelFile(output_path)
-        valid_df = pd.read_excel(existing_data, sheet_name="Compliant Expenses")
-        invalid_df = pd.read_excel(existing_data, sheet_name="Non-Compliant Expenses")
-    else:
-        valid_df = pd.DataFrame()
-        invalid_df = pd.DataFrame()
+    # Define starting row for expense entries
+    START_ROW = 11
+    current_row = START_ROW
+
+    for receipt in valid_receipts + invalid_receipts:
+        sheet.cell(row=current_row, column=1, value=receipt["category"])  # Category
+        sheet.cell(row=current_row, column=2, value=receipt["receipt_id"])  # Reference
+        sheet.cell(row=current_row, column=3, value=receipt["merchant"])  # Details
+        sheet.cell(row=current_row, column=4, value=receipt["receipt_id"])  # Invoice
+        sheet.cell(row=current_row, column=5, value=receipt["total"])  # Amount $
+        sheet.cell(row=current_row, column=6, value="✅ Compliant" if receipt.get("is_compliant", False) else "❌ Non-Compliant")  # Compliance Status
+        sheet.cell(row=current_row, column=7, value="; ".join(receipt.get("violations", [])))  # Compliance Violations
         
-        
-    final_valid_df = pd.concat([valid_df, new_valid_df], ignore_index=True)
-    final_invalid_df = pd.concat([invalid_df, new_invalid_df], ignore_index=True)
+        current_row += 1  # Move to the next row
 
-    # Generate Summary
-    total_receipts = len(final_valid_df) + len(final_invalid_df)
-    total_valid = len(final_valid_df)
-    total_invalid = len(final_invalid_df)
+    output_file_path = os.path.join(output_path)
+    wb.save(output_file_path)
+    print(f"✅ Excel report generated: {output_file_path}")
 
-    summary_data = {
-        "Metric": ["Total Receipts Processed", "Total Compliant", "Total Non-Compliant"],
-        "Value": [total_receipts, total_valid, total_invalid]
-    }
+    return output_file_path
 
-    summary_df = pd.DataFrame(summary_data)
-
-    # Generate Receipts Breakdown
-    receipts_breakdown_data = []
-
-    for r in valid_receipts + invalid_receipts:
-        first_row = {
-            "Receipt ID": r.get("receipt_id", "Unknown ID"),
-            "Merchant": r.get("merchant", "Unknown Merchant"),
-            "Date": r.get("date", "Unknown Date"),
-            "Category": r.get("category", "Other"),
-            "Item Name": "-",
-            "Item Price ($)": "-",
-            "Alcohol?": "-",
-            "Compliance Status": "✅ Compliant" if r.get("is_compliant", False) else "❌ Non-Compliant",
-            "Violations": "; ".join(r.get("violations", [])) if not r.get("is_compliant", False) else "None"
-        }
-        receipts_breakdown_data.append(first_row)
-
-        for item in r.get("items", []):
-            receipts_breakdown_data.append({
-                "Receipt ID": "",
-                "Merchant": "",
-                "Date": "",
-                "Category": "",
-                "Item Name": item["name"],
-                "Item Price ($)": item["price"],
-                "Alcohol?": "Yes" if item.get("is_alcohol", False) else "No",
-                "Compliance Status": "",
-                "Violations": ""
-            })
-
-    receipts_breakdown_df = pd.DataFrame(receipts_breakdown_data)
-
-    with pd.ExcelWriter(output_path, engine="openpyxl", mode="w") as writer:
-        summary_df.to_excel(writer, sheet_name="Summary", index=False)
-        final_valid_df.to_excel(writer, sheet_name="Compliant Expenses", index=False)
-        final_invalid_df.to_excel(writer, sheet_name="Non-Compliant Expenses", index=False)
-        receipts_breakdown_df.to_excel(writer, sheet_name="Receipts Breakdown", index=False)
-
-    return output_path
-
-def generate_pdf_report(valid_receipts, invalid_receipts, pdf_path):
+def generate_pdf_report(valid_receipts, invalid_receipts, pdf_path, user_inputs):
     """
     Generates a visually enhanced PDF expense report.
     """
@@ -137,6 +81,17 @@ def generate_pdf_report(valid_receipts, invalid_receipts, pdf_path):
     pdf.cell(200, 10, txt=f"Generated on: {current_date}", ln=True, align="C")
     pdf.image(logo_path, x=55, y=100, w=100)
     pdf.add_page()
+
+    # Add Details
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(200, 10, txt="Report Details", ln=True)
+    pdf.set_font("Arial", size=12)
+    
+    pdf.cell(200, 8, txt=f"Travel Dates: {user_inputs.get('travel_start_date', 'N/A')} to {user_inputs.get('travel_end_date', 'N/A')}", ln=True)
+    pdf.cell(200, 8, txt=f"Requester: {user_inputs.get('requester', 'N/A')} ({user_inputs.get('requester_department', 'N/A')})", ln=True)
+    pdf.cell(200, 8, txt=f"Approver: {user_inputs.get('approver', 'N/A')} ({user_inputs.get('approver_department', 'N/A')})", ln=True)
+    pdf.cell(200, 8, txt=f"Client: {user_inputs.get('client', 'N/A')} | Project: {user_inputs.get('project', 'N/A')}", ln=True)
+    pdf.ln(10)
 
     # Add Summary Section
     pdf.set_font("Arial", "B", 16)
