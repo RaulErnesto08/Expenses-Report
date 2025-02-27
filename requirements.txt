@@ -1,5 +1,6 @@
 openai
 pillow
+langchain
 langgraph
 pandas
 xlsxwriter
@@ -9,4 +10,7 @@ fpdf
 matplotlib
 sendgrid
 mailersend
-"python-dotenv"
+python-dotenv
+pillow
+graphviz
+grandalf
