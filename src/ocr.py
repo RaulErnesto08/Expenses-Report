@@ -25,7 +25,10 @@ async def extract_text_from_receipt(receipt_path):
         "type": "object",
         "properties": {
             "merchant": {"type": "string"},
-            "date": {"type": "string"},
+            "date": {
+                "type": "string",
+                "description": "Date of transaction strictly in 'YYYY-MM-DD' format (e.g., '2025-01-13'). Do not use any other format."
+            },
             "category": {
                 "type": "string",
                 "enum": [c.value for c in Category]
@@ -58,7 +61,7 @@ async def extract_text_from_receipt(receipt_path):
         f"""This is a receipt image. Extract the following details in structured JSON format:
         
         - **Merchant Name** (store or restaurant name)
-        - **Date** (the date of the transaction)
+        - **Date** must be it in the format: `"YYYY-MM-DD"` (e.g., `"2025-01-13"`) Do not use any other format.
         - **Category** (determine the most appropriate category: Meals, Lodging, Airfare, Rental Car, Transportation, Other)
         - **Items Purchased**:
             - Name of the item
