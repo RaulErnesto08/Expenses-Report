@@ -53,15 +53,21 @@ RECIPIENT_EMAIL="finance-team@example.com"
 streamlit run web/app.py
 ```
 - Upload receipt images
+- Enter **Travel Dates, Requester, Approver, and Client/Project details**
 - Track processing progress
 - Download generated reports
 
 ## 📊 Processing Pipeline
-The **LangGraph agentic pipeline** automates:
-1. **OCR Processing** – Extracts data from receipts  
-2. **Compliance Checking** – Validates expenses against rules
-3. **Report Generation** – Creates structured reports (Excel & PDF)  
-4. **Email Sending** – Sends reports to the finance team  
+The **LangGraph agentic pipeline** automates the entire workflow:  
+
+| **Phase**       | **Subtasks**                                         | **Agent**           |
+|----------------|-----------------------------------------------------|---------------------|
+| **Submission**  | Upload Receipts                                    | User               |
+| **Processing**  | OCR → Compliance Check                             | Processing Agent   |
+| **Report Gen.** | Generate Excel & PDF Reports                       | Processing Agent   |
+| **Emailing**    | Send Reports to Finance Team                       | Action Agent       |
+| **Approval**    | Finance Team Reviews & Approves Report             | Finance Team       |
+
 
 ## 📜 Example Receipt Breakdown
 
@@ -107,10 +113,22 @@ Violations:
 │── 📂 src
 │   ├── assets/
 │   │   ├── logo.png
+│   │   ├── Template.xlsx
+│   ├── agents/
+│   │   ├── processing_agent.py
+│   │   ├── action_agent.py
+│   ├── tools/
+│   │   ├── ocr_tool.py
+│   │   ├── compliance_tool.py
+│   │   ├── report_tool.py
+│   │   ├── email_tool.py
+│   ├── workflows/
+│   │   ├── expense_workflow.py
+│   ├── schemas/
+│   │   ├── state.py
 │   ├── __init__.py
 │   ├── categories.py          # Expense categories
 │   ├── compliance.py          # Compliance validation rules
-│   ├── langgraph_pipeline.py  # LangGraph workflow
 │   ├── ocr.py                 # OCR processing
 │   ├── report_generator.py    # Generates Excel & PDF reports
 │   ├── send_email.py          # Sends reports via SendGrid
